@@ -41,7 +41,7 @@ logging.basicConfig(
 logger = logging.getLogger("hoja-clinica")
 
 APP_PORT = int(os.environ.get("PORT", 5000))
-GEMINI_API_KEY = "AQ.Ab8RN6KYhAf1JWYXW2MzB1_G7W-YR5kz47DJrwQATECzeP3WxQ"
+GEMINI_API_KEY = "AQ.Ab8RN6JydPfqW0YyOIBge2qUvY1WHPMDbrcuhTu23I3NGRMWVQ"
 MODEL_NAME = "gemini-2.5-flash"
 MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8 MB, límite razonable de subida
 ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
