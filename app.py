@@ -120,7 +120,10 @@ def call_gemini_with_retries(image_b64, media_type):
                     {"mime_type": media_type, "data": image_bytes},
                     DIAGNOSIS_PROMPT,
                 ],
-                generation_config={"max_output_tokens": 1200},
+                generation_config={
+                    "max_output_tokens": 1200,
+                    "response_mime_type": "application/json",
+                },
             )
             text_block = response.text
             if not text_block:
