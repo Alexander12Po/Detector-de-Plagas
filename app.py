@@ -217,6 +217,57 @@ def analyze():
     return jsonify({"ok": True, "diagnosis": diagnosis})
 
 
+@app.route("/api/analyze-raw", methods=["POST"])
+def analyze_raw():
+    """Igual que /api/analyze pero acepta la imagen como bytes crudos en el
+    cuerpo de la petición (pensado para Web1.PostFile de App Inventor, que no
+    puede armar fácilmente un JSON con base64)."""
+    if model is None:
+        return error_response(
+            "El servidor no tiene configurada la clave de API de Gemini.",
+            status=500,
+            code="missing_api_key",
+        )
+
+    image_bytes = request.get_data()
+    if not image_bytes:
+        return error_response("No se recibió ninguna imagen en el cuerpo de la solicitud.")
+
+    if len(image_bytes) > MAX_IMAGE_BYTES:
+        return error_response(
+            "La imagen es demasiado grande. Máximo 8 MB.",
+            code="payload_too_large",
+        )
+
+    # Determinar el tipo de imagen a partir del Content-Type que envía
+    # App Inventor (según la extensión del archivo), con JPEG como respaldo.
+    content_type = (request.content_type or "").split(";")[0].strip().lower()
+    if content_type in ALLOWED_MIME_TYPES:
+        media_type = content_type
+    else:
+        media_type = "image/jpeg"
+
+    image_b64 = base64.b64encode(image_bytes).decode("ascii")
+
+    try:
+        diagnosis = call_gemini_with_retries(image_b64, media_type)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Fallo el análisis de imagen (raw)")
+        return error_response(
+            "No se pudo analizar la imagen en este momento. Intenta de nuevo.",
+            status=502,
+            code="analysis_failed",
+        )
+
+    required_keys = {"planta_identificada", "plaga_o_problema", "severidad", "pasos"}
+    if not required_keys.issubset(diagnosis.keys()):
+        return error_response(
+            "El diagnóstico recibido está incompleto.", status=502, code="incomplete_diagnosis"
+        )
+
+    return jsonify({"ok": True, "diagnosis": diagnosis})
+
+
 @app.errorhandler(404)
 def not_found(_):
     return error_response("Ruta no encontrada.", status=404, code="not_found")
