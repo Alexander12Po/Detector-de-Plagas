@@ -104,7 +104,10 @@ def extract_json(text):
     start = cleaned.find("{")
     end = cleaned.rfind("}")
     if start == -1 or end == -1 or end < start:
-        raise ValueError("La respuesta del modelo no contiene un JSON válido")
+        preview = cleaned[:300] if cleaned else "(vacío)"
+        raise ValueError(
+            f"La respuesta del modelo no contiene un JSON válido. Texto recibido: {preview!r}"
+        )
 
     return json.loads(cleaned[start : end + 1])
 
@@ -121,11 +124,21 @@ def call_gemini_with_retries(image_b64, media_type):
                     DIAGNOSIS_PROMPT,
                 ],
                 generation_config={
-                    "max_output_tokens": 1200,
+                    "max_output_tokens": 2048,
                     "response_mime_type": "application/json",
                 },
             )
-            text_block = response.text
+            try:
+                text_block = response.text
+            except Exception as text_exc:
+                finish_reason = None
+                try:
+                    finish_reason = response.candidates[0].finish_reason
+                except Exception:
+                    pass
+                raise ValueError(
+                    f"No se pudo leer el texto de la respuesta (finish_reason={finish_reason}): {text_exc}"
+                )
             if not text_block:
                 raise ValueError("El modelo no devolvió texto")
             return extract_json(text_block)
