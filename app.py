@@ -51,7 +51,7 @@ logger = logging.getLogger("hoja-clinica")
 
 APP_PORT = int(os.environ.get("PORT", 5000))
 ANTHROPIC_API_KEY = "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"
-MODEL_NAME = "claude-sonnet-4-6"
+MODEL_NAME = "claude-sonnet-5"
 MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8 MB, límite razonable de subida
 ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
 MAX_RETRIES = 2
