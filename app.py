@@ -5,12 +5,15 @@ API en Flask que recibe una foto de una planta, la envía a la API de
 Google Gemini para diagnosticar plagas/enfermedades, y devuelve
 un JSON estructurado con el diagnóstico y el plan de tratamiento.
 
+Además incluye /api/tts: convierte el texto del diagnóstico en un audio
+con voz natural (Gemini TTS), pensado para agricultores que no saben leer.
+
 Mantener la llamada a la IA en el backend (en vez de en el navegador)
 evita exponer la clave de API al público y permite validar, reintentar
 y registrar errores de forma centralizada.
 
 La clave de API es GRATIS (con límites generosos) en:
-https://aistudio.google.com/app/apikey
+https://aistudio.google.com/apikey
 """
 
 import base64
@@ -18,6 +21,8 @@ import json
 import logging
 import os
 import time
+import wave
+import io
 
 from flask import Flask, jsonify, request, render_template
 from flask_cors import CORS
@@ -30,6 +35,10 @@ except ImportError:
 
 import google.generativeai as genai
 
+# google-genai es el SDK nuevo, necesario para el modelo de texto-a-voz.
+# Instalar con: pip install google-genai
+from google import genai as genai_client
+
 # ---------------------------------------------------------------------------
 # Configuración
 # ---------------------------------------------------------------------------
@@ -41,16 +50,24 @@ logging.basicConfig(
 logger = logging.getLogger("hoja-clinica")
 
 APP_PORT = int(os.environ.get("PORT", 5000))
+
 GEMINI_API_KEY = "AQ.Ab8RN6KYhAf1JWYXW2MzB1_G7W-YR5kz47DJrwQATECzeP3WxQ"
+
 MODEL_NAME = "gemini-2.5-flash"
+TTS_MODEL_NAME = "gemini-2.5-flash-preview-tts"
+# Voz cálida y clara, apropiada para instrucciones agrícolas en español.
+# Otras opciones disponibles: Kore (firme), Achird (amigable), Puck (animado).
+TTS_VOICE = "Sulafat"
+
 MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8 MB, límite razonable de subida
 ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
 MAX_RETRIES = 2
+MAX_TTS_CHARS = 2000  # protege contra textos demasiado largos
 
 if not GEMINI_API_KEY:
     logger.warning(
         "GEMINI_API_KEY no está configurada. Consíguela gratis en "
-        "https://aistudio.google.com/app/apikey"
+        "https://aistudio.google.com/apikey"
     )
 else:
     genai.configure(api_key=GEMINI_API_KEY)
@@ -65,6 +82,7 @@ def home():
 
 
 model = genai.GenerativeModel(MODEL_NAME) if GEMINI_API_KEY else None
+tts_client = genai_client.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 DIAGNOSIS_PROMPT = """Eres un ingeniero agrónomo experto en fitosanidad y control de plagas.
 Observa la foto de la planta y responde ÚNICAMENTE con un objeto JSON válido,
@@ -151,6 +169,78 @@ def call_gemini_with_retries(image_b64, media_type):
     raise last_error
 
 
+def diagnosis_to_speech_text(diag):
+    """Convierte el JSON del diagnóstico en un texto fluido para narrar,
+    igual al que ya arma el frontend, pero generado en el backend para
+    que /api/tts pueda usarse de forma independiente."""
+    parts = []
+    parts.append(f"Planta identificada: {diag.get('planta_identificada', 'no identificada')}.")
+    parts.append(f"Problema detectado: {diag.get('plaga_o_problema', 'sin determinar')}.")
+    if diag.get("severidad"):
+        parts.append(f"Severidad: {diag['severidad']}.")
+    if diag.get("urgencia"):
+        parts.append(diag["urgencia"])
+
+    symptoms = diag.get("sintomas_observados") or []
+    if symptoms:
+        parts.append("Síntomas observados:")
+        for i, s in enumerate(symptoms, 1):
+            parts.append(f"{i}. {s}.")
+
+    steps = diag.get("pasos") or []
+    if steps:
+        parts.append("Plan de acción a seguir:")
+        for i, p in enumerate(steps, 1):
+            parts.append(f"Paso {i}: {p}.")
+
+    if diag.get("prevencion"):
+        parts.append(f"Prevención: {diag['prevencion']}.")
+
+    return " ".join(parts)
+
+
+def synthesize_speech(text):
+    """Genera audio WAV (base64) a partir de texto usando Gemini TTS.
+    Devuelve (base64_wav, error)."""
+    if tts_client is None:
+        return None, "El servidor no tiene configurada la clave de API."
+
+    # Un tono cálido y claro, en español, apropiado para instrucciones a
+    # agricultores. El prefijo "Di de forma clara y cálida en español:" ayuda
+    # a que el modelo entienda que debe LEER el texto, no reaccionar a él.
+    prompt = f"Di de forma clara, cálida y en español latino: {text}"
+
+    try:
+        response = tts_client.models.generate_content(
+            model=TTS_MODEL_NAME,
+            contents=prompt,
+            config={
+                "response_modalities": ["AUDIO"],
+                "speech_config": {
+                    "voice_config": {
+                        "prebuilt_voice_config": {"voice_name": TTS_VOICE}
+                    }
+                },
+            },
+        )
+        audio_data = response.candidates[0].content.parts[0].inline_data.data
+
+        # El modelo devuelve PCM crudo a 24kHz/16-bit/mono; lo envolvemos en
+        # un contenedor WAV para que cualquier reproductor lo entienda.
+        buffer = io.BytesIO()
+        with wave.open(buffer, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(24000)
+            wf.writeframes(audio_data)
+
+        wav_b64 = base64.b64encode(buffer.getvalue()).decode("ascii")
+        return wav_b64, None
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Fallo la síntesis de voz")
+        return None, str(exc)
+
+
 # ---------------------------------------------------------------------------
 # Rutas
 # ---------------------------------------------------------------------------
@@ -185,7 +275,6 @@ def analyze():
             code="unsupported_media_type",
         )
 
-    # Validar tamaño aproximado antes de decodificar
     approx_bytes = len(image_b64) * 3 / 4
     if approx_bytes > MAX_IMAGE_BYTES:
         return error_response(
@@ -200,7 +289,7 @@ def analyze():
 
     try:
         diagnosis = call_gemini_with_retries(image_b64, media_type)
-    except Exception as exc:  # noqa: BLE001
+    except Exception:
         logger.exception("Fallo el análisis de imagen")
         return error_response(
             "No se pudo analizar la imagen en este momento. Intenta de nuevo.",
@@ -239,8 +328,6 @@ def analyze_raw():
             code="payload_too_large",
         )
 
-    # Determinar el tipo de imagen a partir del Content-Type que envía
-    # App Inventor (según la extensión del archivo), con JPEG como respaldo.
     content_type = (request.content_type or "").split(";")[0].strip().lower()
     if content_type in ALLOWED_MIME_TYPES:
         media_type = content_type
@@ -251,7 +338,7 @@ def analyze_raw():
 
     try:
         diagnosis = call_gemini_with_retries(image_b64, media_type)
-    except Exception as exc:  # noqa: BLE001
+    except Exception:
         logger.exception("Fallo el análisis de imagen (raw)")
         return error_response(
             "No se pudo analizar la imagen en este momento. Intenta de nuevo.",
@@ -266,6 +353,50 @@ def analyze_raw():
         )
 
     return jsonify({"ok": True, "diagnosis": diagnosis})
+
+
+@app.route("/api/tts", methods=["POST"])
+def tts():
+    """Convierte texto (o un diagnóstico completo) en audio con voz natural.
+    Pensado para agricultores que no saben leer: reciben la misma
+    información pero hablada, con una voz más natural que la síntesis de
+    voz nativa del navegador.
+
+    Body esperado, una de estas dos formas:
+      {"text": "texto libre a narrar"}
+      {"diagnosis": {...el objeto JSON del diagnóstico...}}
+    """
+    if tts_client is None:
+        return error_response(
+            "El servidor no tiene configurada la clave de API de Gemini.",
+            status=500,
+            code="missing_api_key",
+        )
+
+    payload = request.get_json(silent=True)
+    if not payload:
+        return error_response("Falta el cuerpo JSON de la solicitud.")
+
+    if payload.get("diagnosis"):
+        text = diagnosis_to_speech_text(payload["diagnosis"])
+    else:
+        text = (payload.get("text") or "").strip()
+
+    if not text:
+        return error_response("Falta el campo 'text' o 'diagnosis'.")
+
+    if len(text) > MAX_TTS_CHARS:
+        text = text[:MAX_TTS_CHARS]
+
+    audio_b64, err = synthesize_speech(text)
+    if err:
+        return error_response(
+            "No se pudo generar el audio en este momento. Intenta de nuevo.",
+            status=502,
+            code="tts_failed",
+        )
+
+    return jsonify({"ok": True, "audio_base64": audio_b64, "mime_type": "audio/wav"})
 
 
 @app.errorhandler(404)
