@@ -218,6 +218,25 @@ def diagnosis_to_speech_text(diag):
     return " ".join(parts)
 
 
+def diagnosis_to_short_speech_text(diag):
+    """Versión resumida del diagnóstico: solo lo esencial (planta, problema,
+    severidad, urgencia y prevención), sin enumerar cada síntoma o paso.
+    Se usa para el quechua, donde el texto tiene que pasar primero por una
+    traducción antes de generarse el audio, así que un texto más corto
+    reduce bastante el tiempo total y el riesgo de que la función se pase
+    del límite de tiempo en Vercel."""
+    parts = []
+    parts.append(f"Planta: {diag.get('planta_identificada', 'no identificada')}.")
+    parts.append(f"Problema: {diag.get('plaga_o_problema', 'sin determinar')}.")
+    if diag.get("severidad"):
+        parts.append(f"Severidad: {diag['severidad']}.")
+    if diag.get("urgencia"):
+        parts.append(diag["urgencia"])
+    if diag.get("prevencion"):
+        parts.append(f"Prevención: {diag['prevencion']}.")
+    return " ".join(parts)
+
+
 def translate_to_quechua(text):
     """Traduce texto de español a quechua chanka (Apurímac/Cusco) usando el
     mismo modelo de texto. Si falla por cualquier motivo, devuelve el texto
@@ -435,8 +454,15 @@ def tts():
     if not payload:
         return error_response("Falta el cuerpo JSON de la solicitud.")
 
+    language = (payload.get("language") or "es").strip().lower()
+    if language not in ("es", "qu"):
+        language = "es"
+
     if payload.get("diagnosis"):
-        text = diagnosis_to_speech_text(payload["diagnosis"])
+        if language == "qu":
+            text = diagnosis_to_short_speech_text(payload["diagnosis"])
+        else:
+            text = diagnosis_to_speech_text(payload["diagnosis"])
     else:
         text = (payload.get("text") or "").strip()
 
@@ -445,10 +471,6 @@ def tts():
 
     if len(text) > MAX_TTS_CHARS:
         text = text[:MAX_TTS_CHARS]
-
-    language = (payload.get("language") or "es").strip().lower()
-    if language not in ("es", "qu"):
-        language = "es"
 
     fallback_to_spanish = False
     if language == "qu":
