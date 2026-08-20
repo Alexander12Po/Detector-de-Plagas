@@ -59,7 +59,7 @@ logger = logging.getLogger("hoja-clinica")
 
 APP_PORT = int(os.environ.get("PORT", 5000))
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6KYhAf1JWYXW2MzB1_G7W-YR5kz47DJrwQATECzeP3WxQ")
 
 MODEL_NAME = "gemini-2.5-flash"
 TTS_MODEL_NAME = "gemini-2.5-flash-preview-tts"
